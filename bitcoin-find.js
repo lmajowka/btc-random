@@ -2,13 +2,22 @@ import CoinKey from 'coinkey';
 import walletsArray from './wallets.js';
 import chalk from 'chalk'
 import fs from 'fs';
+import crypto from 'crypto';
+
 const walletsSet = new Set(walletsArray);
 
-async function encontrarBitcoins(key, min, max, shouldStop){
+async function encontrarBitcoins(key, min, max, shouldStop, rand = 0){
 
     let segundos = 0;
     let pkey = 0;
-    const um = BigInt(1);
+    let um = 0;
+    if (rand === 0){
+        um = BigInt(1)
+        
+    } else {
+        um = BigInt(rand)
+    }
+    
     const startTime = Date.now()
 
     let zeroes = new Array(65).fill('');
@@ -18,10 +27,12 @@ async function encontrarBitcoins(key, min, max, shouldStop){
 
     console.log('Buscando Bitcoins...')
 
+    key = getRandomBigInt(min,max)
+
     const executeLoop = async () => {
     while(!shouldStop()){
     
-        key++; 
+        key += um; 
         pkey = key.toString(16)
         pkey = `${zeroes[pkey.length]}${pkey}`;
     
@@ -33,8 +44,8 @@ async function encontrarBitcoins(key, min, max, shouldStop){
               const tempo = (Date.now() - startTime) / 1000;
               console.clear();
               console.log('Resumo: ')
-              console.log('Velocidade:', (Number(key) - Number(min))/ tempo, ' chaves por segundo')
-              console.log('Chaves buscadas: ', (key - min).toLocaleString('pt-BR'));    
+            //   console.log('Velocidade:', (Number(key) - Number(min))/ tempo, ' chaves por segundo')
+            //   console.log('Chaves buscadas: ', (key - min).toLocaleString('pt-BR'));    
               console.log('Ultima chave tentada: ',pkey )
 
               const filePath = 'Ultima_chave.txt';  // File path to write to
@@ -44,7 +55,16 @@ async function encontrarBitcoins(key, min, max, shouldStop){
               } catch (err) {
                 console.error('Error writing to file:', err);
               }
+
+              key = getRandomBigInt(min,max)
+
+              if (key >= max){
+                key = min
+              }
+              
             }
+            
+            
         }
     
         let publicKey = generatePublic(pkey)
@@ -85,6 +105,23 @@ function generateWIF(privateKey){
     return _key.privateWif
 }
 
+function getRandomBigInt(min, max) {
+    if (min >= max) {
+      throw new Error('min should be less than max');
+    }
+  
+    // Calculate the range
+    const range = max - min;
+  
+    // Generate a random BigInt within the range
+    const randomBigIntInRange = BigInt(`0x${crypto.randomBytes(32).toString('hex')}`) % range;
+  
+    // Add the minimum value to get a number within the desired range
+    const randomBigInt = min + randomBigIntInRange;
+  
+    return randomBigInt;
+  }
+  
 
 
 export default encontrarBitcoins;
