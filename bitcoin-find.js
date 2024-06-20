@@ -1,61 +1,31 @@
 import CoinKey from 'coinkey';
 import walletsArray from './wallets.js';
 import chalk from 'chalk';
-import fs from 'fs/promises'; // Use fs/promises para operações assíncronas de arquivo
-import os from 'os'; // para leitura da memoria do sistema
 import crypto from 'crypto';
-import bs58 from 'bs58';// otmizar as chaves unicas randoms
+import bs58 from 'bs58';
+import fs from 'fs';
+import { promises as fsPromises } from 'fs';
+import Database from 'better-sqlite3';
+
+const dbFilePath = './database.db';
+
+const dbExists = fs.existsSync(dbFilePath);
+const db = new Database(dbFilePath);
+if (!dbExists) {
+    console.log('Banco de dados não encontrado. Criando novo banco de dados...');
+    db.prepare("CREATE TABLE IF NOT EXISTS privatekeys (id INTEGER PRIMARY KEY, key TEXT UNIQUE)").run();
+}
 
 const walletsSet = new Set(walletsArray);
 
 async function encontrarBitcoins(key, min, max, shouldStop, rand = 0) {
     let segundos = 0;
     let pkey = 0n;
-    let chavesArray = new Set(); 
-    let chavesArray10s = new Set(); 
-    const chavesUnicasFilePath = 'chavesUnicasRandom.txt';
+    let chavesArray10s = new Set();
+    let chavesArray10sBackup = new Set();
 
-    // Função para ler o arquivo em partes menores usando calculo de tamanho
-    async function readFileInChunks(filePath) {
-        const startTime = Date.now();
-        try {
-            console.log("\nLendo arquivo de chaves random's por partes...\n");
-            const { size: fileSize } = await fs.stat(filePath);
-            const fileSizeInMB = fileSize / (1024 * 1024) > 1 ? (fileSize / (1024 * 1024)).toFixed(2) + " MB" : fileSize + " Bytes";
-            console.log(`Tamanho do arquivo: ${fileSizeInMB}`);
-
-            const freeMemory = os.freemem();
-            const chunkSize = Math.min(1024 * 1024, Math.floor(freeMemory / 10), fileSize); // calcula 1 MB como tamanho máximo (1024 * 1024 bytes), considera a quantidade de memória disponível no sistema (limitado a um décimo da memória) e o tamanho total do arquivo para determinar o tamanho máximo
-            const fileHandle = await fs.open(filePath, 'r');
-            let buffer = Buffer.alloc(chunkSize);
-            let bytesRead;
-            while ((bytesRead = (await fileHandle.read(buffer, 0, chunkSize, null)).bytesRead) > 0) {
-                const chunk = buffer.slice(0, bytesRead).toString('utf8');
-                const chaves = chunk.split('\n').filter(Boolean); // Filtra linhas vazias
-                chaves.forEach(chave => chavesArray.add(chave));
-            }
-            await fileHandle.close();
-        } catch (error) {
-            if (error.code === 'ENOENT') {
-                console.log(`Arquivo ${chavesUnicasFilePath} não encontrado. Criando um novo arquivo...`);
-                // Inicializa o arquivo com conteúdo vazio
-                await fs.writeFile(chavesUnicasFilePath, '', 'utf8');
-            } else {
-                console.error('Erro ao ler o arquivo chavesUnicasRandom.txt:', error);
-            }
-        } finally {
-            const endTime = Date.now();
-            const elapsedTime = (endTime - startTime) / 1000;
-            console.log(`Tempo total do carregamento: ${elapsedTime.toFixed(2)} segundos`);
-        }
-    }
-
-    await readFileInChunks(chavesUnicasFilePath);
-
-    const um = rand === 0 ? 0n : BigInt(rand); // precisa estar 0 caso seja opção 1 - se deixar 1 pula para próxima key
-
+    const um = rand === 0 ? 0n : BigInt(rand);
     const startTime = Date.now();
-    let keysInLast10Seconds = 0n;
     let keysInLastFull = 0n;
     const zeroes = Array.from({ length: 65 }, (_, i) => '0'.repeat(64 - i));
 
@@ -65,11 +35,28 @@ async function encontrarBitcoins(key, min, max, shouldStop, rand = 0) {
     key = getRandomBigInt(min, max);
     let running = true;
 
+    const keyExists = (key) => {
+        const stmt = db.prepare("SELECT 1 FROM privatekeys WHERE key = ?");
+        const row = stmt.get(key);
+        return !!row;
+    };
 
-    async function achou(pkey) { 
-    const publicKey = generatePublic(pkey);
+    const insertKeysInBatch = (keys) => {
+        const insert = db.prepare("INSERT INTO privatekeys (key) VALUES (?)");
+        const insertMany = db.transaction((keys) => {
+            for (const key of keys) {
+                if (!keyExists(key)) {
+                    insert.run(key);
+                }
+            }
+        });
+        insertMany(keys);
+    };
 
-        if (walletsSet.has(publicKey)) { 
+    async function achou(pkey) {
+        const publicKey = generatePublic(pkey);
+
+        if (walletsSet.has(publicKey)) {
             const tempo = (Date.now() - startTime) / 1000;
             const dataFormatada = new Date().toLocaleDateString();
             console.clear();
@@ -83,28 +70,26 @@ async function encontrarBitcoins(key, min, max, shouldStop, rand = 0) {
             const lineToAppend = `Private key: ${pkey}, WIF: ${generateWIF(pkey)} , Data: ${dataFormatada}\n`;
 
             try {
-                await fs.access(filePathKeys);
-                await fs.appendFile(filePathKeys, lineToAppend, 'utf8');
+                await fsPromises.appendFile(filePathKeys, lineToAppend, 'utf8');
                 console.log(`Private key e WIF salvos no arquivo: ${filePathKeys}`);
             } catch (error) {
                 if (error.code === 'ENOENT') {
                     console.log(`Arquivo ${filePathKeys} não encontrado. Criando um novo arquivo...`);
                     const initialContent = `Chaves encontradas:\n`;
-                    await fs.writeFile(filePathKeys, initialContent, 'utf8');
-                    await fs.appendFile(filePathKeys, lineToAppend, 'utf8');
+                    await fsPromises.writeFile(filePathKeys, initialContent, 'utf8');
+                    await fsPromises.appendFile(filePathKeys, lineToAppend, 'utf8');
                     console.log(`Private key e WIF salvos no arquivo: ${filePathKeys}`);
                 } else {
                     console.error(`Erro ao acessar o arquivo ${filePathKeys}:`, error);
                 }
             }
 
-            const uniqueKeysContent = Array.from(chavesArray10s).join('\n');
-            await fs.appendFile(chavesUnicasFilePath,`\n${uniqueKeysContent}`, 'utf8');
-
             running = false;
             return;
         }
     }
+
+    let pkeyBackup = '';
 
     const executeLoop = async () => {
         while (running && !shouldStop()) {
@@ -112,18 +97,17 @@ async function encontrarBitcoins(key, min, max, shouldStop, rand = 0) {
             pkey = key.toString(16);
             pkey = `${zeroes[pkey.length]}${pkey}`;
 
-
             await achou(pkey);
             const base58Key = bs58.encode(Buffer.from(pkey, 'hex'));
-            if (!chavesArray.has(base58Key)) {// aqui verifico todas as chaves
-                chavesArray.add(base58Key);
-                chavesArray10s.add(base58Key); // salvo as chaves que rodou apos 10segundos
-                keysInLastFull += 1n;
-            } else {                
-                await achou(pkey,chavesArray10s);  // Verifica novamente, para gerar nova chave logo em seguinte
+
+            if (pkeyBackup === pkey || chavesArray10sBackup.has(base58Key) || keyExists(base58Key)) {
+                await achou(pkey);
                 key = getRandomBigInt(min, max);
                 continue;
             }
+
+            chavesArray10s.add(base58Key);
+            keysInLastFull += 1n;
 
             if (Date.now() - startTime > segundos) {
                 segundos += 1000;
@@ -132,57 +116,41 @@ async function encontrarBitcoins(key, min, max, shouldStop, rand = 0) {
                     const tempo = (Date.now() - startTime) / 1000;
                     console.clear();
                     console.log('Resumo: ');
-                    console.log('Tempo em hash total: ', arrerondar(keysInLastFull.toString()/segundos),'total/10segundos')
-                    console.log('Total de chaves buscadas:',arrerondar(keysInLastFull.toString()));
-                    console.log('Chaves buscadas em 10 segundos:', chavesArray10s.size,'- quanto maior melhor');
-                    
-                    
-                    console.log('Ultima chave tentada:', pkey); 
+                    console.log('Tempo em hash total: ', arrerondar(keysInLastFull.toString() / segundos), 'total/10segundos');
+                    console.log('Total de chaves buscadas:', arrerondar(keysInLastFull.toString()));
+                    console.log('Chaves buscadas em 10 segundos:', chavesArray10s.size, '- quanto maior melhor');
+                    console.log('Ultima chave tentada:', pkey);
+
                     const filePath = 'Ultima_chave.txt';
                     const content = `Última chave tentada: ${pkey}`;
 
                     try {
-                        await fs.writeFile(filePath, content, 'utf8');
+                        await fsPromises.writeFile(filePath, content, 'utf8');
                     } catch (error) {
                         if (error.code === 'ENOENT') {
                             console.log(`Arquivo ${filePath} não encontrado. Criando um novo arquivo...`);
-                            // Inicializa o arquivo com conteúdo
-                            await fs.writeFile(filePath, content, 'utf8');
+                            await fsPromises.writeFile(filePath, content, 'utf8');
                         } else {
                             console.error(`Erro ao escrever no arquivo ${filePath}:`, error);
                         }
                     }
 
-
-
-                    const uniqueKeysContent = Array.from(chavesArray10s).join('\n');
-                    await fs.appendFile(chavesUnicasFilePath,`\n${uniqueKeysContent}`, 'utf8'); // salvo apenas as chaves buscas pelo time de segundos, pois o sistema fica xiando o salvamento do \n
-                
-                    
+                    insertKeysInBatch(chavesArray10s);
+                    chavesArray10sBackup = new Set([...chavesArray10s]);
                     chavesArray10s.clear();
-
                     key = getRandomBigInt(min, max);
 
                     if (key >= max) {
                         key = min;
                     }
-
-
                 }
-
-
             }
 
-            
-            
-
-            await new Promise(resolve => setImmediate(resolve));  // Non-blocking loop
+            pkeyBackup = pkey;
+            await new Promise(resolve => setImmediate(resolve));
         }
+        chavesArray10sBackup.clear();
     };
-
-
-        
-
 
     await executeLoop();
 }
