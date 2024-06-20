@@ -1,5 +1,6 @@
 ﻿import ranges from './ranges.js'
 import encontrarBitcoins from './bitcoin-find.js'
+import walletsArray from './wallets.js';
 import readline from 'readline'
 import chalk from 'chalk'
 
@@ -10,7 +11,7 @@ const rl = readline.createInterface({
 
 let shouldStop = false;
 
-
+const walletsSet = new Set(walletsArray);
 
 let key = 0;
 let min, max = 0;
@@ -26,14 +27,16 @@ console.log("\x1b[38;2;250;128;114m" + "╔════════════�
             "║" + "\x1b[0m" + "\x1b[36m" + "                                                        " + "\x1b[0m" + "\x1b[38;2;250;128;114m" + "║\n" +
             "╚══════════════════════\x1b[32m" + "Investidor Internacional - v0.4r" + "\x1b[0m\x1b[38;2;250;128;114m══╝" + "\x1b[0m");
 
-rl.question(`Escolha uma carteira puzzle( ${chalk.cyan(1)} - ${chalk.cyan(160)}): `, (answer) => {
+rl.question(`Escolha uma carteira puzzle( ${chalk.cyan(1)} - ${chalk.cyan(walletsSet.size)}): `, (answer) => {
     
-    if (parseInt(answer) < 1 || parseInt(answer) > 161) {
-        console.log(chalk.bgRed('Erro: voce precisa escolher um numero entre 1 e 160'))
+    if (parseInt(answer) < 1 || parseInt(answer) > walletsSet.size) {
+        console.log(chalk.bgRed('Erro: voce precisa escolher um numero entre 1 e',walletsSet.size))
     }
 
     min = ranges[answer-1].min
     max = ranges[answer-1].max
+
+
     console.log('Carteira escolhida: ', chalk.cyan(answer), ' Min: ', chalk.yellow(min), ' Max: ', chalk.yellow(max) )
     console.log('Numero possivel de chaves:',  chalk.yellow(parseInt(BigInt(max) - BigInt(min)).toLocaleString('pt-BR')))
     let status = ''
@@ -44,21 +47,19 @@ rl.question(`Escolha uma carteira puzzle( ${chalk.cyan(1)} - ${chalk.cyan(160)})
     }
 
     console.log('Status: ', status)
-    key = BigInt(min)
     
+
+                min = BigInt(min);
+                max = BigInt(max);  
+                key = BigInt(min);
+
     rl.question(`Escolha uma opcao (${chalk.cyan(1)} - Estou sorte, ${chalk.cyan(2)} - Estou com sorte mas quero influencia-la ):`, (answer2) => {
         if (answer2 == '2'){
             rl.question('Escolha um numero entre 0 e 1.000.000.000: ', (answer3) => {
-                min = BigInt(min);
-                max = BigInt(max);  
-                key = BigInt(min)
                 encontrarBitcoins(key, min, max, () => shouldStop,answer3)
                 rl.close();
             });
         } else {
-            min = BigInt(min);
-            max = BigInt(max);
-            key = BigInt(min)
             encontrarBitcoins(key, min, max, () => shouldStop)
             rl.close();
         }
