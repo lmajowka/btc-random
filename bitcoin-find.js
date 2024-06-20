@@ -45,9 +45,18 @@ async function encontrarBitcoins(key, min, max, shouldStop, rand = 0) {
         const insert = db.prepare("INSERT INTO privatekeys (key) VALUES (?)");
         const insertMany = db.transaction((keys) => {
             for (const key of keys) {
+
                 if (!keyExists(key)) {
-                    insert.run(key);
-                }
+                   	try {
+	                    insert.run(key);
+	                } catch (error) {
+	                	 if (error.code === 'SQLITE_BUSY') {
+	                	 	//console.warn('Database is busy, retrying...');
+	                	 	setTimeout(() => insertMany([key]), 500);
+	                	 }
+	                }
+            	}
+
             }
         });
         insertMany(keys);
@@ -116,7 +125,7 @@ async function encontrarBitcoins(key, min, max, shouldStop, rand = 0) {
                     const tempo = (Date.now() - startTime) / 1000;
                     console.clear();
                     console.log('Resumo: ');
-                    console.log('Tempo em hash total: ', arrerondar(keysInLastFull.toString() / segundos), 'total/10segundos');
+                    console.log('Tempo em hash total: ', arrerondar(keysInLastFull.toString() / segundos), 'total/10segundos segundos:'+segundos);
                     console.log('Total de chaves buscadas:', arrerondar(keysInLastFull.toString()));
                     console.log('Chaves buscadas em 10 segundos:', chavesArray10s.size, '- quanto maior melhor');
                     console.log('Ultima chave tentada:', pkey);
