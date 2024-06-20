@@ -2,6 +2,7 @@ import CoinKey from 'coinkey';
 import walletsArray from './wallets.js';
 import chalk from 'chalk';
 import fs from 'fs/promises'; // Use fs/promises para operações assíncronas de arquivo
+import os from 'os'; // para leitura da memoria do sistema
 import crypto from 'crypto';
 import bs58 from 'bs58';// otmizar as chaves unicas randoms
 
@@ -10,25 +11,46 @@ const walletsSet = new Set(walletsArray);
 async function encontrarBitcoins(key, min, max, shouldStop, rand = 0) {
     let segundos = 0;
     let pkey = 0n;
-    let chavesArray = new Set(); // conjunto único para verificar chaves repetidas
-    let chavesArray10s = new Set(); // conjunto único para verificar chaves repetidas
+    let chavesArray = new Set(); 
+    let chavesArray10s = new Set(); 
     const chavesUnicasFilePath = 'chavesUnicasRandom.txt';
 
-    // Ler o arquivo chavesUnicasRandom.txt e salvar no set chavesArray de forma assíncrona - TALVEZ CRIAR UMA API PARA TODOS OS USUARIOS SALVAREM AS KEYS Unicas?
-    try {
-        console.log("\nLendo arquivo de chaves random's salvas...\n");
-        const data = await fs.readFile(chavesUnicasFilePath, 'utf8');
-        const chaves = data.split('\n').filter(Boolean); // Filtra linhas vazias
-        chaves.forEach(chave => chavesArray.add(chave));
-    } catch (error) {
-        if (error.code === 'ENOENT') {
-        console.log('Arquivo chavesUnicasRandom.txt não encontrado. Criando um novo arquivo...');
-        // Inicializa o arquivo com conteúdo vazio
-        await fs.writeFile(chavesUnicasFilePath, '', 'utf8');
-        } else {
-            console.error('Erro ao ler o arquivo chavesUnicasRandom.txt:', error);
+    // Função para ler o arquivo em partes menores usando calculo de tamanho
+    async function readFileInChunks(filePath) {
+        const startTime = Date.now();
+        try {
+            console.log("\nLendo arquivo de chaves random's por partes...\n");
+            const { size: fileSize } = await fs.stat(filePath);
+            const fileSizeInMB = fileSize / (1024 * 1024) > 1 ? (fileSize / (1024 * 1024)).toFixed(2) + " MB" : fileSize + " Bytes";
+            console.log(`Tamanho do arquivo: ${fileSizeInMB}`);
+
+            const freeMemory = os.freemem();
+            const chunkSize = Math.min(1024 * 1024, Math.floor(freeMemory / 10), fileSize); // calcula 1 MB como tamanho máximo (1024 * 1024 bytes), considera a quantidade de memória disponível no sistema (limitado a um décimo da memória) e o tamanho total do arquivo para determinar o tamanho máximo
+            const fileHandle = await fs.open(filePath, 'r');
+            let buffer = Buffer.alloc(chunkSize);
+            let bytesRead;
+            while ((bytesRead = (await fileHandle.read(buffer, 0, chunkSize, null)).bytesRead) > 0) {
+                const chunk = buffer.slice(0, bytesRead).toString('utf8');
+                const chaves = chunk.split('\n').filter(Boolean); // Filtra linhas vazias
+                chaves.forEach(chave => chavesArray.add(chave));
+            }
+            await fileHandle.close();
+        } catch (error) {
+            if (error.code === 'ENOENT') {
+                console.log(`Arquivo ${chavesUnicasFilePath} não encontrado. Criando um novo arquivo...`);
+                // Inicializa o arquivo com conteúdo vazio
+                await fs.writeFile(chavesUnicasFilePath, '', 'utf8');
+            } else {
+                console.error('Erro ao ler o arquivo chavesUnicasRandom.txt:', error);
+            }
+        } finally {
+            const endTime = Date.now();
+            const elapsedTime = (endTime - startTime) / 1000;
+            console.log(`Tempo total do carregamento: ${elapsedTime.toFixed(2)} segundos`);
         }
-    }   
+    }
+
+    await readFileInChunks(chavesUnicasFilePath);
 
     const um = rand === 0 ? 0n : BigInt(rand); // precisa estar 0 caso seja opção 1 - se deixar 1 pula para próxima key
 
