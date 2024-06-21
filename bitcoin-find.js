@@ -12,7 +12,6 @@ const dbFilePath = './database.db';
 const dbExists = fs.existsSync(dbFilePath);
 const db = new Database(dbFilePath);
 if (!dbExists) {
-    console.log('Banco de dados não encontrado. Criando novo banco de dados...');
     db.prepare("CREATE TABLE IF NOT EXISTS privatekeys (id INTEGER PRIMARY KEY, key TEXT UNIQUE)").run();
 }
 
@@ -22,6 +21,7 @@ async function encontrarBitcoins(key, min, max, shouldStop, rand = 0) {
     let segundos = 0;
     let pkey = 0n;
     let chavesArray10s = new Set();
+    let chavesArray60s = new Set();  // Conjunto para inserção a cada 60 segundos
     let chavesArray10sBackup = new Set();
 
     const um = rand === 0 ? 0n : BigInt(rand);
@@ -41,25 +41,44 @@ async function encontrarBitcoins(key, min, max, shouldStop, rand = 0) {
         return !!row;
     };
 
-    const insertKeysInBatch = (keys) => {
+    const insertKeysInBatch = async (keys) => {
         const insert = db.prepare("INSERT INTO privatekeys (key) VALUES (?)");
         const insertMany = db.transaction((keys) => {
             for (const key of keys) {
-
                 if (!keyExists(key)) {
-                   	try {
-	                    insert.run(key);
-	                } catch (error) {
-	                	 if (error.code === 'SQLITE_BUSY') {
-	                	 	//console.warn('Database is busy, retrying...');
-	                	 	setTimeout(() => insertMany([key]), 500);
-	                	 }
-	                }
-            	}
-
+                    try {
+                        insert.run(key);
+                    } catch (error) {
+                        if (error.code === 'SQLITE_BUSY') {
+                            // Não faça nada aqui, uma nova tentativa sera feita fora da função
+                        }
+                    }
+                }
             }
         });
-        insertMany(keys);
+
+        let success = false;
+        let retries = 0;
+        while (!success && retries < 5) {
+            try {
+                insertMany(keys);
+                success = true;
+            } catch (error) {
+                if (error.code === 'SQLITE_BUSY') {
+                    retries += 1;
+                    const backoffTime = Math.pow(2, retries) * 100;  // Exponential backoff
+                    console.warn(`O banco de dados está ocupado, tentando novamente ${backoffTime}ms...`);
+                    await new Promise(resolve => setTimeout(resolve, backoffTime));
+                } else {
+                    console.error('Erro inesperado ao inserir chaves:', error);
+                    break;
+                }
+            }
+        }
+
+        if (!success) {
+            console.error('Falha ao inserir chaves após várias tentativas.');
+        }
     };
 
     async function achou(pkey) {
@@ -110,12 +129,13 @@ async function encontrarBitcoins(key, min, max, shouldStop, rand = 0) {
             const base58Key = bs58.encode(Buffer.from(pkey, 'hex'));
 
             if (pkeyBackup === pkey || chavesArray10sBackup.has(base58Key) || keyExists(base58Key)) {
-                await achou(pkey);
+                await achou(pkey);// verifico pela questão da db.
                 key = getRandomBigInt(min, max);
                 continue;
             }
 
             chavesArray10s.add(base58Key);
+            chavesArray60s.add(base58Key);  // cada 60s vai tentar salvar na DB
             keysInLastFull += 1n;
 
             if (Date.now() - startTime > segundos) {
@@ -125,8 +145,8 @@ async function encontrarBitcoins(key, min, max, shouldStop, rand = 0) {
                     const tempo = (Date.now() - startTime) / 1000;
                     console.clear();
                     console.log('Resumo: ');
-                    console.log('Tempo em hash total: ', arrerondar(keysInLastFull.toString() / segundos), 'total/10segundos segundos:'+segundos);
                     console.log('Total de chaves buscadas:', arrerondar(keysInLastFull.toString()));
+                    console.log('Tempo em hash total:', arrerondar(keysInLastFull.toString() / segundos), '- total de chaves buscadas/' + (segundos/1000)+' segundos');
                     console.log('Chaves buscadas em 10 segundos:', chavesArray10s.size, '- quanto maior melhor');
                     console.log('Ultima chave tentada:', pkey);
 
@@ -144,7 +164,6 @@ async function encontrarBitcoins(key, min, max, shouldStop, rand = 0) {
                         }
                     }
 
-                    insertKeysInBatch(chavesArray10s);
                     chavesArray10sBackup = new Set([...chavesArray10s]);
                     chavesArray10s.clear();
                     key = getRandomBigInt(min, max);
@@ -152,6 +171,13 @@ async function encontrarBitcoins(key, min, max, shouldStop, rand = 0) {
                     if (key >= max) {
                         key = min;
                     }
+                }
+
+                if (segundos % 30000 === 0) {  // Inserir a cada 30 segundos
+                    console.log('Salvando no banco de dados...')
+                    await insertKeysInBatch(chavesArray60s);
+                    console.log('feito...')
+                    chavesArray60s.clear();
                 }
             }
 
