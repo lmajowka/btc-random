@@ -5,15 +5,7 @@ import crypto from 'crypto';
 import bs58 from 'bs58';
 import fs from 'fs';
 import { promises as fsPromises } from 'fs';
-import Database from 'better-sqlite3';
 
-const dbFilePath = './database.db';
-
-const dbExists = fs.existsSync(dbFilePath);
-const db = new Database(dbFilePath);
-if (!dbExists) {
-    db.prepare("CREATE TABLE IF NOT EXISTS privatekeys (id INTEGER PRIMARY KEY, key TEXT UNIQUE)").run();
-}
 
 const walletsSet = new Set(walletsArray);
 
@@ -21,8 +13,6 @@ async function encontrarBitcoins(key, min, max, shouldStop, rand = 0) {
     let segundos = 0;
     let pkey = 0n;
     let chavesArray10s = new Set();
-    let chavesArray60s = new Set();  // Conjunto para inserção a cada 60 segundos
-    let chavesArray10sBackup = new Set();
 
     const um = rand === 0 ? 0n : BigInt(rand);
     const startTime = Date.now();
@@ -35,51 +25,6 @@ async function encontrarBitcoins(key, min, max, shouldStop, rand = 0) {
     key = getRandomBigInt(min, max);
     let running = true;
 
-    const keyExists = (key) => {
-        const stmt = db.prepare("SELECT 1 FROM privatekeys WHERE key = ?");
-        const row = stmt.get(key);
-        return !!row;
-    };
-
-    const insertKeysInBatch = async (keys) => {
-        const insert = db.prepare("INSERT INTO privatekeys (key) VALUES (?)");
-        const insertMany = db.transaction((keys) => {
-            for (const key of keys) {
-                if (!keyExists(key)) {
-                    try {
-                        insert.run(key);
-                    } catch (error) {
-                        if (error.code === 'SQLITE_BUSY') {
-                            // Não faça nada aqui, uma nova tentativa sera feita fora da função
-                        }
-                    }
-                }
-            }
-        });
-
-        let success = false;
-        let retries = 0;
-        while (!success && retries < 5) {
-            try {
-                insertMany(keys);
-                success = true;
-            } catch (error) {
-                if (error.code === 'SQLITE_BUSY') {
-                    retries += 1;
-                    const backoffTime = Math.pow(2, retries) * 100;  // Exponential backoff
-                    console.warn(`O banco de dados está ocupado, tentando novamente ${backoffTime}ms...`);
-                    await new Promise(resolve => setTimeout(resolve, backoffTime));
-                } else {
-                    console.error('Erro inesperado ao inserir chaves:', error);
-                    break;
-                }
-            }
-        }
-
-        if (!success) {
-            console.error('Falha ao inserir chaves após várias tentativas.');
-        }
-    };
 
     async function achou(pkey) {
         const publicKey = generatePublic(pkey);
@@ -113,7 +58,7 @@ async function encontrarBitcoins(key, min, max, shouldStop, rand = 0) {
             }
 
             running = false;
-            return;
+            return(0);
         }
     }
 
@@ -128,14 +73,13 @@ async function encontrarBitcoins(key, min, max, shouldStop, rand = 0) {
             await achou(pkey);
             const base58Key = bs58.encode(Buffer.from(pkey, 'hex'));
 
-            if (pkeyBackup === pkey || chavesArray10sBackup.has(base58Key) || keyExists(base58Key)) {
-                await achou(pkey);// verifico pela questão da db.
+            if (pkeyBackup === pkey || chavesArray10s.has(base58Key)) {
+                await achou(pkey);
                 key = getRandomBigInt(min, max);
                 continue;
             }
 
             chavesArray10s.add(base58Key);
-            chavesArray60s.add(base58Key);  // cada 60s vai tentar salvar na DB
             keysInLastFull += 1n;
 
             if (Date.now() - startTime > segundos) {
@@ -164,7 +108,7 @@ async function encontrarBitcoins(key, min, max, shouldStop, rand = 0) {
                         }
                     }
 
-                    chavesArray10sBackup = new Set([...chavesArray10s]);
+                    
                     chavesArray10s.clear();
                     key = getRandomBigInt(min, max);
 
@@ -173,18 +117,12 @@ async function encontrarBitcoins(key, min, max, shouldStop, rand = 0) {
                     }
                 }
 
-                if (segundos % 30000 === 0) {  // Inserir a cada 30 segundos
-                    console.log('Salvando no banco de dados...')
-                    await insertKeysInBatch(chavesArray60s);
-                    console.log('feito...')
-                    chavesArray60s.clear();
-                }
             }
 
             pkeyBackup = pkey;
             await new Promise(resolve => setImmediate(resolve));
         }
-        chavesArray10sBackup.clear();
+        
     };
 
     await executeLoop();
